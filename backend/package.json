@@ -1,0 +1,14 @@
+{
+  "name": "detectaemociones-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor backend FastAPI + OpenCV + DeepFace para DetectaEmociones ejecutado mediante scripts de npm sin entorno virtual",
+  "scripts": {
+    "dev": "python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
+    "start": "python -m uvicorn app.main:app --host 127.0.0.1 --port 8000",
+    "test": "python -m pytest -v",
+    "test:unit": "python -m pytest -v -m \"not integration\"",
+    "test:integration": "python -m pytest -v -m integration",
+    "postinstall": "python -m pip install -r requirements.txt"
+  }
+}

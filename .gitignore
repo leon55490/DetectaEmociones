@@ -1,0 +1,28 @@
+# Entornos virtuales de Python y cachés
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Dependencias y compilación de Node / Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Variables de entorno locales
+.env
+.env.local
+.env.*.local
+
+# Archivos del sistema operativo y editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

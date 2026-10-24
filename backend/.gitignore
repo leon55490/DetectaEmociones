@@ -1,0 +1,26 @@
+# Entornos virtuales de Python (por si se crean)
+.venv/
+venv/
+env/
+
+# Cachés y archivos compilados de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Variables de entorno locales (usa .env.example como plantilla)
+.env
+.env.local
+.env.*.local
+
+# Registros y archivos del sistema / editores
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
