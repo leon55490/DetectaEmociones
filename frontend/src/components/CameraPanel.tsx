@@ -32,10 +32,10 @@ interface CameraPanelProps {
 }
 
 const INTERVAL_OPTIONS = [
-  { value: 700, label: '700 ms (Rápido)' },
-  { value: 850, label: '850 ms (Recomendado)' },
-  { value: 1000, label: '1000 ms (Estándar)' },
-  { value: 1500, label: '1500 ms (Bajo consumo)' },
+  { value: 450, label: '450 ms (Muy fluido)' },
+  { value: 700, label: '700 ms (Recomendado)' },
+  { value: 850, label: '850 ms (Estándar)' },
+  { value: 1200, label: '1200 ms (Bajo consumo)' },
 ];
 
 export const CameraPanel: React.FC<CameraPanelProps> = ({
@@ -85,6 +85,12 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
     };
   }, [isActive, latestResult, captureDimensions, mirrored]);
 
+  // Ajustar relación de aspecto al stream real de la cámara para alinear el recuadro sin recortes
+  const containerAspectRatio =
+    isActive && captureDimensions && captureDimensions.width > 0 && captureDimensions.height > 0
+      ? `${captureDimensions.width} / ${captureDimensions.height}`
+      : '4 / 3';
+
   return (
     <div className="bg-white border border-[#E2E8F0] rounded-2xl shadow-sm flex flex-col overflow-hidden">
       {/* Cabecera de la tarjeta */}
@@ -118,13 +124,16 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
       </div>
 
       {/* Contenedor del reproductor de video */}
-      <div className="relative bg-[#0F172A] aspect-[4/3] w-full overflow-hidden flex items-center justify-center">
+      <div
+        style={{ aspectRatio: containerAspectRatio }}
+        className="relative bg-[#0F172A] w-full overflow-hidden flex items-center justify-center"
+      >
         <video
           ref={videoRef}
           playsInline
           muted
           autoPlay
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ${
+          className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-200 ${
             isActive ? 'opacity-100' : 'opacity-0 pointer-events-none'
           } ${mirrored ? 'scale-x-[-1]' : ''}`}
         />
@@ -133,7 +142,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
         {faceBoxStyle && (
           <div
             style={faceBoxStyle}
-            className="pointer-events-none absolute border-2 border-[#14B8A6] rounded-xl shadow-[0_0_0_2px_rgba(20,184,166,0.25)] transition-all duration-200"
+            className="pointer-events-none absolute border-2 border-[#14B8A6] rounded-xl shadow-[0_0_0_2px_rgba(20,184,166,0.25)] transition-all duration-300 ease-out"
           >
             {latestResult?.dominant_emotion_label && (
               <span className="absolute -top-6 left-0 px-2 py-0.5 rounded-md bg-[#14B8A6] text-slate-950 font-semibold text-[11px] shadow-sm whitespace-nowrap">

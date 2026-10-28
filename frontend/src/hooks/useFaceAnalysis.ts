@@ -2,13 +2,90 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { analyzeFrame, ApiError, checkBackendHealth } from '../services/api';
 import {
   CameraStatus,
+  EMOTION_CATALOG,
+  EMOTION_ORDER,
   EmotionAnalysisResponse,
+  EmotionKey,
+  EmotionScores,
+  FacialArea,
   HealthResponse,
 } from '../types/emotion';
 
-const MAX_CAPTURE_WIDTH = 480;
-const JPEG_QUALITY = 0.78;
+const MAX_CAPTURE_WIDTH = 640;
+const JPEG_QUALITY = 0.82;
 const REQUEST_TIMEOUT_MS = 18000;
+
+// Factores de suavizado exponencial (EMA) para estabilizar emociones y recuadro
+const EMOTION_ALPHA = 0.72;
+const BOX_ALPHA = 0.6;
+const HYSTERESIS_MARGIN = 3.5;
+const MAX_MISSED_FRAMES_HOLD = 1;
+
+function smoothResult(
+  incoming: EmotionAnalysisResponse,
+  previous: EmotionAnalysisResponse | null,
+): EmotionAnalysisResponse {
+  if (
+    !incoming.face_detected ||
+    !incoming.emotions ||
+    !previous?.face_detected ||
+    !previous.emotions
+  ) {
+    return incoming;
+  }
+
+  const smoothedEmotions = {} as EmotionScores;
+  let bestKey: EmotionKey = incoming.dominant_emotion ?? 'neutral';
+  let bestScore = -1;
+
+  for (const key of EMOTION_ORDER) {
+    const nextVal = incoming.emotions[key] ?? 0;
+    const prevVal = previous.emotions[key] ?? nextVal;
+    const blended = Number((EMOTION_ALPHA * nextVal + (1 - EMOTION_ALPHA) * prevVal).toFixed(2));
+    smoothedEmotions[key] = blended;
+    if (blended > bestScore) {
+      bestScore = blended;
+      bestKey = key;
+    }
+  }
+
+  // Histéresis para evitar parpadeos, pero permitiendo salir de 'neutral' o 'sad'
+  // de inmediato cuando se detecta enojo, sorpresa, miedo o disgusto.
+  const prevDominant = previous.dominant_emotion;
+  const isMinorityBest =
+    bestKey === 'angry' || bestKey === 'surprise' || bestKey === 'fear' || bestKey === 'disgust';
+  if (
+    prevDominant &&
+    prevDominant !== 'neutral' &&
+    !(prevDominant === 'sad' && isMinorityBest) &&
+    prevDominant !== bestKey &&
+    smoothedEmotions[prevDominant] + HYSTERESIS_MARGIN >= bestScore
+  ) {
+    bestKey = prevDominant;
+    bestScore = smoothedEmotions[prevDominant];
+  }
+
+  let smoothedArea: FacialArea | null = incoming.facial_area;
+  if (incoming.facial_area && previous.facial_area) {
+    const cur = incoming.facial_area;
+    const prev = previous.facial_area;
+    smoothedArea = {
+      x: Math.round(BOX_ALPHA * cur.x + (1 - BOX_ALPHA) * prev.x),
+      y: Math.round(BOX_ALPHA * cur.y + (1 - BOX_ALPHA) * prev.y),
+      w: Math.round(BOX_ALPHA * cur.w + (1 - BOX_ALPHA) * prev.w),
+      h: Math.round(BOX_ALPHA * cur.h + (1 - BOX_ALPHA) * prev.h),
+    };
+  }
+
+  return {
+    ...incoming,
+    dominant_emotion: bestKey,
+    dominant_emotion_label: EMOTION_CATALOG[bestKey].label,
+    confidence: bestScore,
+    emotions: smoothedEmotions,
+    facial_area: smoothedArea,
+  };
+}
 
 export interface CaptureDimensions {
   width: number;
@@ -36,7 +113,7 @@ export interface UseFaceAnalysisReturn {
   refreshBackendHealth: () => Promise<void>;
 }
 
-export function useFaceAnalysis(initialIntervalMs = 850): UseFaceAnalysisReturn {
+export function useFaceAnalysis(initialIntervalMs = 700): UseFaceAnalysisReturn {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -46,6 +123,8 @@ export function useFaceAnalysis(initialIntervalMs = 850): UseFaceAnalysisReturn 
   const latestAppliedSeqRef = useRef<number>(0);
   const timerIdRef = useRef<number | null>(null);
   const slowTimerIdRef = useRef<number | null>(null);
+  const smoothedFaceRef = useRef<EmotionAnalysisResponse | null>(null);
+  const missedFramesRef = useRef<number>(0);
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>('idle');
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -101,6 +180,8 @@ export function useFaceAnalysis(initialIntervalMs = 850): UseFaceAnalysisReturn 
     clearIntervalLoop();
     clearPendingRequest();
     releaseMediaStream();
+    smoothedFaceRef.current = null;
+    missedFramesRef.current = 0;
     setIsAnalysisActive(false);
     setCameraStatus('idle');
     setCameraError(null);
@@ -132,6 +213,8 @@ export function useFaceAnalysis(initialIntervalMs = 850): UseFaceAnalysisReturn 
     clearIntervalLoop();
     clearPendingRequest();
     releaseMediaStream();
+    smoothedFaceRef.current = null;
+    missedFramesRef.current = 0;
     setCameraError(null);
     setAnalysisError(null);
 
@@ -267,7 +350,27 @@ export function useFaceAnalysis(initialIntervalMs = 850): UseFaceAnalysisReturn 
       // Evitar que respuestas antiguas sobrescriban resultados más recientes
       if (currentSeq >= latestAppliedSeqRef.current) {
         latestAppliedSeqRef.current = currentSeq;
-        setLatestResult(result);
+
+        let displayResult = result;
+        if (result.face_detected) {
+          missedFramesRef.current = 0;
+          displayResult = smoothResult(result, smoothedFaceRef.current);
+          smoothedFaceRef.current = displayResult;
+        } else if (
+          smoothedFaceRef.current !== null &&
+          missedFramesRef.current < MAX_MISSED_FRAMES_HOLD
+        ) {
+          // Mantener brevemente el último rostro si se pierde solo 1 fotograma puntual
+          missedFramesRef.current += 1;
+          displayResult = {
+            ...smoothedFaceRef.current,
+            processing_time_ms: result.processing_time_ms,
+          };
+        } else {
+          smoothedFaceRef.current = null;
+        }
+
+        setLatestResult(displayResult);
         setCaptureDimensions({ width: targetWidth, height: targetHeight });
         setLastUpdatedAt(new Date());
         setAnalysisError(null);

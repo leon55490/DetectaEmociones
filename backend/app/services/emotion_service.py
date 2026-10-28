@@ -24,6 +24,25 @@ EMOTION_LABELS_ES: Dict[str, str] = {
 
 EXPECTED_EMOTION_KEYS = ("happy", "sad", "angry", "surprise", "fear", "disgust", "neutral")
 
+# Las 4 emociones subrepresentadas en el modelo FER-2013
+MINORITY_EMOTIONS = ("angry", "surprise", "fear", "disgust")
+
+# Umbral mínimo crudo (%) para considerar que hay un gesto intencional y no ruido en reposo
+MINORITY_THRESHOLDS: Dict[str, float] = {
+    "angry": 8.5,
+    "surprise": 8.0,
+    "fear": 7.5,
+    "disgust": 3.5,
+}
+
+# Multiplicadores moderados para compensar el desbalance de FER-2013 sin romper el estado Neutral
+MINORITY_BOOST: Dict[str, float] = {
+    "angry": 3.4,
+    "surprise": 3.2,
+    "fear": 3.6,
+    "disgust": 6.5,
+}
+
 
 class InvalidImageError(ValueError):
     """Excepción lanzada cuando los bytes enviados no corresponden a una imagen válida."""
@@ -93,6 +112,96 @@ class EmotionService:
         return image_bgr
 
     @staticmethod
+    def _enhance_lighting(image_bgr: np.ndarray) -> np.ndarray:
+        """
+        Preprocesamiento con OpenCV para mejorar el contraste de rasgos faciales sin añadir ruido:
+        1. Filtro bilateral suave para reducir el grano de la webcam preservando bordes.
+        2. CLAHE moderado en el canal L (LAB) para compensar sombras o contraluz.
+        """
+        denoised = cv2.bilateralFilter(image_bgr, d=5, sigmaColor=35, sigmaSpace=35)
+        lab = cv2.cvtColor(denoised, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_enhanced = clahe.apply(l_channel)
+        merged = cv2.merge((l_enhanced, a_channel, b_channel))
+        return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+    @staticmethod
+    def _calibrate_subtle_emotions(emotions: Dict[str, float]) -> Dict[str, float]:
+        """
+        Equilibra la sensibilidad entre 'neutral', las emociones frecuentes ('happy', 'sad')
+        y las 4 emociones minoritarias ('angry', 'surprise', 'fear', 'disgust').
+        Preserva 'neutral' cuando el rostro está en reposo.
+        """
+        expressive_keys = [k for k in EXPECTED_EMOTION_KEYS if k != "neutral"]
+        top_expressive = max(expressive_keys, key=lambda k: emotions.get(k, 0.0))
+        top_expressive_val = emotions.get(top_expressive, 0.0)
+        neutral_val = emotions.get("neutral", 0.0)
+
+        # 1. Si una emoción expresiva ya domina con claridad (>= 50%), mantener valores originales
+        if top_expressive_val >= 50.0 and top_expressive_val > neutral_val:
+            return emotions
+
+        # 2. Si el rostro está claramente en reposo (neutral >= 62% y sin gesto marcado), mantener Neutral
+        if neutral_val >= 62.0 and top_expressive_val < 18.0:
+            return emotions
+
+        happy_val = emotions.get("happy", 0.0)
+        sad_val = emotions.get("sad", 0.0)
+
+        # 3. Evaluar si alguna de las 4 emociones minoritarias supera su umbral de activación
+        minority_ratios = {
+            k: emotions.get(k, 0.0) / MINORITY_THRESHOLDS[k] for k in MINORITY_EMOTIONS
+        }
+        best_minority = max(MINORITY_EMOTIONS, key=lambda k: minority_ratios[k])
+        best_minority_ratio = minority_ratios[best_minority]
+
+        adjusted = dict(emotions)
+
+        if best_minority_ratio >= 1.0 and happy_val < 35.0:
+            # Impulsar la emoción minoritaria detectada y moderar el sesgo de 'sad' y 'neutral'
+            for k in MINORITY_EMOTIONS:
+                if minority_ratios[k] >= 1.0:
+                    adjusted[k] = emotions.get(k, 0.0) * MINORITY_BOOST[k]
+            adjusted["neutral"] = neutral_val * 0.52
+            adjusted["sad"] = sad_val * 0.58
+        elif happy_val >= 18.0 or sad_val >= 25.0:
+            # Sonrisa suave o gesto de tristeza claro
+            adjusted["neutral"] = neutral_val * 0.55
+            if happy_val >= 18.0:
+                adjusted["happy"] = happy_val * 1.9
+            if sad_val >= 25.0:
+                adjusted["sad"] = sad_val * 1.5
+        else:
+            # Ninguna emoción supera los umbrales de gesto intencional -> se mantiene Neutral
+            return emotions
+
+        total = sum(adjusted.values())
+        if total <= 0:
+            return emotions
+
+        return {
+            key: round(max(0.0, min(100.0, (adjusted[key] / total) * 100.0)), 2)
+            for key in EXPECTED_EMOTION_KEYS
+        }
+
+    @staticmethod
+    def _filter_valid_faces(results: List[Dict[str, Any]], img_w: int, img_h: int) -> List[Dict[str, Any]]:
+        """
+        Descarta falsos positivos de OpenCV (regiones minúsculas o con baja confianza).
+        """
+        min_side = max(24, int(min(img_w, img_h) * 0.08))
+        valid: List[Dict[str, Any]] = []
+        for item in results:
+            region = item.get("region") or {}
+            w = int(region.get("w", 0) or 0)
+            h = int(region.get("h", 0) or 0)
+            confidence = float(item.get("face_confidence", 1.0) or 0.0)
+            if w >= min_side and h >= min_side and confidence >= 0.5:
+                valid.append(item)
+        return valid if valid else results
+
+    @staticmethod
     def _is_no_face_exception(exc: Exception) -> bool:
         """
         Determina si un ValueError lanzado por DeepFace corresponde específicamente
@@ -125,24 +234,27 @@ class EmotionService:
 
     def analyze_image_bytes(self, image_bytes: bytes) -> EmotionAnalysisResponse:
         """
-        Decodifica los bytes de la imagen y ejecuta únicamente la estimación de expresiones
-        faciales con DeepFace, devolviendo un esquema tipado y serializable a JSON.
+        Decodifica los bytes de la imagen, optimiza iluminación con OpenCV y ejecuta
+        la estimación de expresiones faciales con DeepFace calibrada para las 7 emociones.
         """
         start_time = time.perf_counter()
 
-        # 1. Decodificar imagen con OpenCV (sin guardar en disco)
+        # 1. Decodificar imagen con OpenCV y mejorar iluminación
         image_bgr = self.decode_image(image_bytes)
+        img_h, img_w = image_bgr.shape[:2]
+        enhanced_bgr = self._enhance_lighting(image_bgr)
 
-        # 2. Ejecutar análisis de emociones con DeepFace
+        # 2. Ejecutar análisis de emociones con DeepFace (usando detector OpenCV y alineación ocular)
         try:
             from deepface import DeepFace
 
             with self._lock:
                 raw_result = DeepFace.analyze(
-                    img_path=image_bgr,
+                    img_path=enhanced_bgr,
                     actions=["emotion"],
                     enforce_detection=True,
                     detector_backend=settings.DEEPFACE_DETECTOR_BACKEND,
+                    align=True,
                     silent=True,
                 )
                 self._model_loaded = True
@@ -175,9 +287,8 @@ class EmotionService:
         else:
             results_list = []
 
-        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
-
         if not results_list:
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
             return EmotionAnalysisResponse(
                 success=True,
                 face_detected=False,
@@ -191,25 +302,26 @@ class EmotionService:
                 processing_time_ms=elapsed_ms,
             )
 
-        # Filtrar falsos positivos donde el detector no encontró región válida si existiera alguno
+        # Filtrar falsos positivos donde el detector encontró regiones minúsculas o de baja confianza
+        results_list = self._filter_valid_faces(results_list, img_w=img_w, img_h=img_h)
         faces_count = len(results_list)
         primary_face = self._select_primary_face(results_list)
 
-        raw_emotions: Dict[str, Any] = primary_face.get("emotion") or {}
+        raw_emotions: Dict[str, Any] = dict(primary_face.get("emotion") or {})
+        region_data: Optional[Dict[str, Any]] = primary_face.get("region")
+
         normalized_emotions: Dict[str, float] = {}
         for key in EXPECTED_EMOTION_KEYS:
             value = float(raw_emotions.get(key, 0.0))
-            # Mantener en el rango [0.0, 100.0] con 2 decimales
             normalized_emotions[key] = round(max(0.0, min(100.0, value)), 2)
 
-        dominant_emotion = str(primary_face.get("dominant_emotion") or "").lower().strip()
-        if dominant_emotion not in normalized_emotions:
-            dominant_emotion = max(normalized_emotions, key=normalized_emotions.get)  # type: ignore[arg-type]
+        # 4. Calibrar sensibilidad equilibrando Neutral con las emociones expresivas
+        calibrated_emotions = self._calibrate_subtle_emotions(normalized_emotions)
+        dominant_emotion = max(calibrated_emotions, key=calibrated_emotions.get)  # type: ignore[arg-type]
 
         dominant_label = EMOTION_LABELS_ES.get(dominant_emotion, "Neutral")
-        confidence = round(float(normalized_emotions.get(dominant_emotion, 0.0)), 2)
+        confidence = round(float(calibrated_emotions.get(dominant_emotion, 0.0)), 2)
 
-        region_data: Optional[Dict[str, Any]] = primary_face.get("region")
         facial_area: Optional[FacialArea] = None
         if isinstance(region_data, dict) and all(k in region_data for k in ("x", "y", "w", "h")):
             facial_area = FacialArea(
@@ -219,6 +331,7 @@ class EmotionService:
                 h=int(region_data["h"]),
             )
 
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         info_message = (
             f"Se detectaron {faces_count} rostros. Mostrando el análisis del rostro principal."
             if faces_count > 1
@@ -232,7 +345,7 @@ class EmotionService:
             dominant_emotion=dominant_emotion,
             dominant_emotion_label=dominant_label,
             confidence=confidence,
-            emotions=EmotionScores(**normalized_emotions),
+            emotions=EmotionScores(**calibrated_emotions),
             facial_area=facial_area,
             message=info_message,
             processing_time_ms=elapsed_ms,

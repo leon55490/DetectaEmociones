@@ -24,7 +24,7 @@ export const HomePage: React.FC = () => {
     stopCamera,
     toggleAnalysis,
     refreshBackendHealth,
-  } = useFaceAnalysis(850);
+  } = useFaceAnalysis(700);
 
   return (
     <div id="top" className="min-h-screen flex flex-col bg-[#F8FAFC] text-[#0F172A]">
