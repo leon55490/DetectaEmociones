@@ -70,6 +70,7 @@ Recibe `multipart/form-data` con el campo `file` (JPEG, PNG o WebP, máx. 5 MB).
 - Si no hay rostro, responde `200` con `face_detected: false` y el resto de campos en `null`.
 - Si hay varios rostros, analiza solo el de mayor área y lo indica en `faces_count`.
 - Las puntuaciones están en escala 0–100 y son valores del modelo, no probabilidades calibradas.
+- El backend conserva las puntuaciones originales de DeepFace sin multiplicadores heurísticos; el frontend solo suaviza las predicciones entre fotogramas para reducir cambios bruscos.
 - Errores: `400` (sin archivo, vacío o imagen inválida), `413` (demasiado grande), `415` (formato no permitido), `500` (fallo del modelo).
 
 ## Configuración (`.env`)

@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   AlertCircle,
   Camera,
   CameraOff,
   Clock,
-  FlipHorizontal,
   Loader2,
   Pause,
   Play,
@@ -53,7 +52,6 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
   onStopCamera,
   onToggleAnalysis,
 }) => {
-  const [mirrored, setMirrored] = useState<boolean>(true);
   const isActive = cameraStatus === 'active';
   const isRequesting = cameraStatus === 'requesting';
 
@@ -74,7 +72,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
     const widthPct = Math.min(100, Math.max(0, (w / captureDimensions.width) * 100));
     const heightPct = Math.min(100, Math.max(0, (h / captureDimensions.height) * 100));
     const rawLeftPct = (x / captureDimensions.width) * 100;
-    const leftPct = mirrored ? Math.max(0, 100 - rawLeftPct - widthPct) : Math.max(0, rawLeftPct);
+    const leftPct = Math.max(0, rawLeftPct);
     const topPct = Math.min(100, Math.max(0, (y / captureDimensions.height) * 100));
 
     return {
@@ -83,7 +81,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
       width: `${widthPct}%`,
       height: `${heightPct}%`,
     };
-  }, [isActive, latestResult, captureDimensions, mirrored]);
+  }, [isActive, latestResult, captureDimensions]);
 
   // Ajustar relación de aspecto al stream real de la cámara para alinear el recuadro sin recortes
   const containerAspectRatio =
@@ -135,7 +133,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
           autoPlay
           className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-200 ${
             isActive ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          } ${mirrored ? 'scale-x-[-1]' : ''}`}
+          }`}
         />
 
         {/* Recuadro delimitador del rostro principal */}
@@ -176,15 +174,6 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={() => setMirrored((prev) => !prev)}
-              title="Invertir vista espejo horizontal"
-              className="pointer-events-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/75 hover:bg-slate-900 text-white text-xs border border-white/15 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#14B8A6]"
-            >
-              <FlipHorizontal className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Espejo</span>
-            </button>
           </div>
         )}
 

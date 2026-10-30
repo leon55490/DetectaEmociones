@@ -1,26 +1,15 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Activity,
   AlertCircle,
-  BarChart3,
   CheckCircle2,
   Clock,
-  ListFilter,
   Loader2,
   ScanFace,
   UserCheck,
   UserX,
   Users,
 } from 'lucide-react';
-import {
-  Bar,
-  BarChart,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import {
   CameraStatus,
   EMOTION_CATALOG,
@@ -46,8 +35,6 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
   lastUpdatedAt,
   analysisError,
 }) => {
-  const [viewMode, setViewMode] = useState<'bars' | 'chart'>('bars');
-
   const formattedTime = lastUpdatedAt
     ? lastUpdatedAt.toLocaleTimeString('es-ES', {
         hour: '2-digit',
@@ -219,43 +206,16 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
             </div>
           )}
 
-          {/* Desglose de las 7 categorías con selector entre barras de progreso y gráfico Recharts */}
+          {/* Desglose de las 7 categorías */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wider text-[#64748B]">
                 Puntuaciones del modelo (7 categorías)
               </span>
 
-              <div className="inline-flex rounded-lg p-0.5 bg-[#F8FAFC] border border-[#E2E8F0]">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('bars')}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    viewMode === 'bars'
-                      ? 'bg-[#4F46E5] text-white'
-                      : 'text-[#64748B] hover:text-[#0F172A]'
-                  }`}
-                >
-                  <ListFilter className="w-3.5 h-3.5" />
-                  <span>Barras</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('chart')}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    viewMode === 'chart'
-                      ? 'bg-[#4F46E5] text-white'
-                      : 'text-[#64748B] hover:text-[#0F172A]'
-                  }`}
-                >
-                  <BarChart3 className="w-3.5 h-3.5" />
-                  <span>Gráfico</span>
-                </button>
-              </div>
             </div>
 
-            {viewMode === 'bars' ? (
-              <div className="space-y-2.5">
+            <div className="space-y-2.5">
                 {emotionItems.map((item) => {
                   const isDominant = dominantKey === item.key && latestResult?.face_detected;
                   return (
@@ -299,46 +259,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                     </div>
                   );
                 })}
-              </div>
-            ) : (
-              <div className="h-60 w-full pt-2">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={emotionItems}
-                    layout="vertical"
-                    margin={{ top: 4, right: 20, left: 10, bottom: 4 }}
-                  >
-                    <XAxis type="number" domain={[0, 100]} hide />
-                    <YAxis
-                      type="category"
-                      dataKey="label"
-                      width={92}
-                      tick={{ fontSize: 12, fill: '#64748B' }}
-                    />
-                    <Tooltip
-                      formatter={(value: number) => [`${Number(value).toFixed(1)}%`, 'Puntuación']}
-                      contentStyle={{
-                        borderRadius: '12px',
-                        border: '1px solid #E2E8F0',
-                        fontSize: '12px',
-                      }}
-                    />
-                    <Bar dataKey="score" radius={[0, 6, 6, 0]} isAnimationActive={false}>
-                      {emotionItems.map((entry) => (
-                        <Cell
-                          key={entry.key}
-                          fill={
-                            dominantKey === entry.key && latestResult?.face_detected
-                              ? '#4F46E5'
-                              : '#14B8A6'
-                          }
-                        />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
+            </div>
           </div>
         </div>
       </div>

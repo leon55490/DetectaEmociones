@@ -192,3 +192,37 @@ def test_analyze_selects_primary_face_when_multiple_faces_detected() -> None:
     assert data["dominant_emotion_label"] == "Sorprendido"
     assert data["facial_area"] == {"x": 60, "y": 40, "w": 140, "h": 140}
     assert "2 rostros" in data["message"]
+
+
+def test_analyze_returns_raw_model_scores_without_emotion_boosting() -> None:
+    """Verifica que el backend no altere artificialmente las puntuaciones del modelo."""
+    jpeg_bytes = _create_blank_jpeg_bytes()
+    mocked_deepface_output = [
+        {
+            "emotion": {
+                "happy": 5.0,
+                "sad": 20.0,
+                "angry": 2.0,
+                "surprise": 3.0,
+                "fear": 2.0,
+                "disgust": 1.0,
+                "neutral": 67.0,
+            },
+            "dominant_emotion": "neutral",
+            "region": {"x": 42, "y": 38, "w": 120, "h": 120},
+            "face_confidence": 0.99,
+        }
+    ]
+
+    with patch("deepface.DeepFace.analyze", return_value=mocked_deepface_output):
+        response = client.post(
+            "/api/emotion/analyze",
+            files={"file": ("triste.jpg", io.BytesIO(jpeg_bytes), "image/jpeg")},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dominant_emotion"] == "neutral"
+    assert data["dominant_emotion_label"] == "Neutral"
+    assert data["emotions"]["sad"] == 20.0
+    assert data["emotions"]["neutral"] == 67.0

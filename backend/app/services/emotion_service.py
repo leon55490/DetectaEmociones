@@ -24,26 +24,6 @@ EMOTION_LABELS_ES: Dict[str, str] = {
 
 EXPECTED_EMOTION_KEYS = ("happy", "sad", "angry", "surprise", "fear", "disgust", "neutral")
 
-# Las 4 emociones subrepresentadas en el modelo FER-2013
-MINORITY_EMOTIONS = ("angry", "surprise", "fear", "disgust")
-
-# Umbral mínimo crudo (%) para considerar que hay un gesto intencional y no ruido en reposo
-MINORITY_THRESHOLDS: Dict[str, float] = {
-    "angry": 8.5,
-    "surprise": 8.0,
-    "fear": 7.5,
-    "disgust": 3.5,
-}
-
-# Multiplicadores moderados para compensar el desbalance de FER-2013 sin romper el estado Neutral
-MINORITY_BOOST: Dict[str, float] = {
-    "angry": 3.4,
-    "surprise": 3.2,
-    "fear": 3.6,
-    "disgust": 6.5,
-}
-
-
 class InvalidImageError(ValueError):
     """Excepción lanzada cuando los bytes enviados no corresponden a una imagen válida."""
 
@@ -125,65 +105,6 @@ class EmotionService:
         l_enhanced = clahe.apply(l_channel)
         merged = cv2.merge((l_enhanced, a_channel, b_channel))
         return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
-
-    @staticmethod
-    def _calibrate_subtle_emotions(emotions: Dict[str, float]) -> Dict[str, float]:
-        """
-        Equilibra la sensibilidad entre 'neutral', las emociones frecuentes ('happy', 'sad')
-        y las 4 emociones minoritarias ('angry', 'surprise', 'fear', 'disgust').
-        Preserva 'neutral' cuando el rostro está en reposo.
-        """
-        expressive_keys = [k for k in EXPECTED_EMOTION_KEYS if k != "neutral"]
-        top_expressive = max(expressive_keys, key=lambda k: emotions.get(k, 0.0))
-        top_expressive_val = emotions.get(top_expressive, 0.0)
-        neutral_val = emotions.get("neutral", 0.0)
-
-        # 1. Si una emoción expresiva ya domina con claridad (>= 50%), mantener valores originales
-        if top_expressive_val >= 50.0 and top_expressive_val > neutral_val:
-            return emotions
-
-        # 2. Si el rostro está claramente en reposo (neutral >= 62% y sin gesto marcado), mantener Neutral
-        if neutral_val >= 62.0 and top_expressive_val < 18.0:
-            return emotions
-
-        happy_val = emotions.get("happy", 0.0)
-        sad_val = emotions.get("sad", 0.0)
-
-        # 3. Evaluar si alguna de las 4 emociones minoritarias supera su umbral de activación
-        minority_ratios = {
-            k: emotions.get(k, 0.0) / MINORITY_THRESHOLDS[k] for k in MINORITY_EMOTIONS
-        }
-        best_minority = max(MINORITY_EMOTIONS, key=lambda k: minority_ratios[k])
-        best_minority_ratio = minority_ratios[best_minority]
-
-        adjusted = dict(emotions)
-
-        if best_minority_ratio >= 1.0 and happy_val < 35.0:
-            # Impulsar la emoción minoritaria detectada y moderar el sesgo de 'sad' y 'neutral'
-            for k in MINORITY_EMOTIONS:
-                if minority_ratios[k] >= 1.0:
-                    adjusted[k] = emotions.get(k, 0.0) * MINORITY_BOOST[k]
-            adjusted["neutral"] = neutral_val * 0.52
-            adjusted["sad"] = sad_val * 0.58
-        elif happy_val >= 18.0 or sad_val >= 25.0:
-            # Sonrisa suave o gesto de tristeza claro
-            adjusted["neutral"] = neutral_val * 0.55
-            if happy_val >= 18.0:
-                adjusted["happy"] = happy_val * 1.9
-            if sad_val >= 25.0:
-                adjusted["sad"] = sad_val * 1.5
-        else:
-            # Ninguna emoción supera los umbrales de gesto intencional -> se mantiene Neutral
-            return emotions
-
-        total = sum(adjusted.values())
-        if total <= 0:
-            return emotions
-
-        return {
-            key: round(max(0.0, min(100.0, (adjusted[key] / total) * 100.0)), 2)
-            for key in EXPECTED_EMOTION_KEYS
-        }
 
     @staticmethod
     def _filter_valid_faces(results: List[Dict[str, Any]], img_w: int, img_h: int) -> List[Dict[str, Any]]:
@@ -315,12 +236,11 @@ class EmotionService:
             value = float(raw_emotions.get(key, 0.0))
             normalized_emotions[key] = round(max(0.0, min(100.0, value)), 2)
 
-        # 4. Calibrar sensibilidad equilibrando Neutral con las emociones expresivas
-        calibrated_emotions = self._calibrate_subtle_emotions(normalized_emotions)
-        dominant_emotion = max(calibrated_emotions, key=calibrated_emotions.get)  # type: ignore[arg-type]
+        # Mantener las puntuaciones originales del modelo; no se aplican refuerzos heurísticos.
+        dominant_emotion = max(normalized_emotions, key=normalized_emotions.get)
 
         dominant_label = EMOTION_LABELS_ES.get(dominant_emotion, "Neutral")
-        confidence = round(float(calibrated_emotions.get(dominant_emotion, 0.0)), 2)
+        confidence = round(float(normalized_emotions.get(dominant_emotion, 0.0)), 2)
 
         facial_area: Optional[FacialArea] = None
         if isinstance(region_data, dict) and all(k in region_data for k in ("x", "y", "w", "h")):
@@ -345,7 +265,7 @@ class EmotionService:
             dominant_emotion=dominant_emotion,
             dominant_emotion_label=dominant_label,
             confidence=confidence,
-            emotions=EmotionScores(**calibrated_emotions),
+            emotions=EmotionScores(**normalized_emotions),
             facial_area=facial_area,
             message=info_message,
             processing_time_ms=elapsed_ms,
